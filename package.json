@@ -1,0 +1,20 @@
+{
+  "name": "paas-batch",
+  "version": "0.9.0",
+  "description": "Batch process for PAAS (update DB and send reminder emails)",
+  "main": "pass-Batch.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "set NODE_ENV=production && node paas-batch.js"
+  },
+  "repository": "https://github.com/cwkummer/paas-batch",
+  "author": "Chris Kummer",
+  "license": "MIT",
+  "dependencies": {
+    "bluebird": "3.5.1",
+    "lodash": "4.17.4",
+    "mongodb": "3.0.1",
+    "node-fetch": "1.7.3",
+    "nodemailer": "4.4.1"
+  }
+}
