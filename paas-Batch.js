@@ -37,11 +37,11 @@ const getKeyDBUsers = async () => {
   dBUsers = [];
   await db.find("$.status IN ('active','noManager')")
     .execute((doc) => { if (doc != undefined) dBUsers.push(doc); });
-  keyedDBUsers = _.keyBy(dBUsers, 'sid'); 
+  keyedDBUsers = _.keyBy(dBUsers, 'sid');
 }
 
 (async () => {
-	
+
 	// Connect to MySQL
   const session = await mySQLX.getSession({ host: 'localhost', port: 33060, dbUser: 'root', dbPassword: '5@nj0$3@', ssl: false });
 	db = session.getSchema('paas').getCollection('authorizations');
@@ -64,7 +64,7 @@ const getKeyDBUsers = async () => {
   // Compare API and DB users and create/update DB users as necessary
   aPIUsers.forEach((aPIUser) => {
     if (!keyedDBUsers[aPIUser.sid]) { // User in API but not DB - Create new user
-      createUser(aPIUser); 
+      createUser(aPIUser);
     }
     else { // User in API and DB
       if (aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) { // User has updated manager in API - Set inactive and create new user
@@ -79,7 +79,7 @@ const getKeyDBUsers = async () => {
   dBUsers.forEach((dBUser) => { if (!keyedAPIUsers[dBUser.sid]) { deactivateUser(dBUser); } }); // User not in API - Set inactive
 
   await db.add(addStaff).execute(); // Create new users in DB
-	
+
   // Send reminder emails to managers
   if(date.getDay() == 1) { // Send only on Mondays
     await getKeyDBUsers(); // Get DB users and key by SID
