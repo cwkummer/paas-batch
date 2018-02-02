@@ -1,50 +1,69 @@
 const fetch = require('node-fetch');
 const Promise = fetch.Promise = require('bluebird');
-const MongoClient = require('mongodb').MongoClient
+const mySQLX = require('@mysql/xdevapi');
 const _ = require('lodash');
+const uuid = require('uuid/v4');
 const sendEmail = require('./paas-SendEmail.js');
 
-const url = 'mongodb://localhost:27017';
-const colName = 'testusers';
-
 let newUsers = 0, deactivateUsers = 0, updateManagers = 0, updateFullNames = 0;  // **Testing**
-let updates = [];
+let db, query, dBUsers = [], keyedDBUsers = [], addStaff = []
 const date = new Date();
 const iSODate = date.toISOString();
 const authYear = (() => {
   date.setDate(date.getDate() - 30);
   return date.getFullYear();
 })();
-const isResetDate = () => (date.getMonth() === 0 && date.getDate() === 31)
+
+const getUUID = () => ( uuid().replace(/-/g,"").toUpperCase() )
+const yearlyReset = async () => {
+  await db.modify("$.status IN ('active','noManager')")
+  .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
+}
 const createUser = (user) => {
   user.created = user.lastUpdated = iSODate;
   if (!user.managerSID) { user.status = "noManager"; }
-  updates.push({ insertOne: { document: user } });
+	addStaff.push(user);
   newUsers++; // **Testing**
 };
-const deativateUser = (user) => {
-  updates.push({ updateOne: { filter: { sid: user.sid, status: 'active' }, update: { $set: { status: 'inactive', lastUpdated: iSODate } } } });
+const deactivateUser = async (user) => {
+  query = `($.status == "active") && ($.sid == ${JSON.stringify(user.sid)})`;
+	await db.modify(query)
+    .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
   deactivateUsers++; // **Testing**
 };
+const updateUserFullName = async (user) => {
+  query = `($.status == "active") && ($.sid == ${JSON.stringify(user.sid)})`;
+  await db.modify(query)
+    .set('$.fullName', user.fullName).set('$.lastUpdated', iSODate).execute();
+  updateFullNames++; // **Testing**
+}
+const getKeyDBUsers = async () => {
+  dBUsers = [];
+  await db.find("$.status IN ('active','noManager')")
+    .execute((doc) => { if (doc != undefined) dBUsers.push(doc); });
+  keyedDBUsers = _.keyBy(dBUsers, 'sid'); 
+}
 
 (async () => {
+	
+	// Connect to MySQL
+  const session = await mySQLX.getSession({ host: 'localhost', port: 33060, dbUser: 'root', dbPassword: '5@nj0$3@', ssl: false });
+	db = session.getSchema('paas').getCollection('authorizations');
 
-  // Connect to Mongo
-  const client = await MongoClient.connect(url);
-  const Users = client.db("paas").collection(colName);
-
-  if (isResetDate()) { await Users.updateMany({}, { $set: { status: "inactive" } }); } // Yearly reset of all users on January 31st
+  // Yearly reset of all users on January 31st
+  if (date.getMonth() === 0 && date.getDate() === 31) { yearlyReset(); };
 
   // Get users from the API
   const aPIUsers = await fetch('https://testedapi.technology.ca.gov/employees/bars')
     .then(response => response.json().map(x => ({
-      fullName: x.fullName, sid: x.sid, email: x.email, managerFullName: x.manager,
-      managerSID: x.managerSid, status: 'active', app1: null, app2: null, app3: null,
-      app4: null, created: null, lastApproved: null, lastUpdated: null, authYear: authYear
+      fullName: x.fullName, sid: x.sid, email: x.email, managerFullName: x.manager, 
+      managerSID: x.managerSid, status: 'active', app1: null, app2: null, app3: null, 
+      app4: null, created: null, lastApproved: null, lastUpdated: null, authYear: authYear, 
+      _id: getUUID()
     })))
 
   // **Testing**
-  // await Users.deleteMany({}); // Delete all users in DB
+  // await db.remove('true').execute(); // Delete all users in DB
   // aPIUsers[766].managerSID = "Changed Manager SID"; // Change API data: A user has a new manager
   // aPIUsers[766].managerFullName = "Changed Manager Full Name"; // Change API data: A user has a new manager
   // aPIUsers[766].fullName = "Changed Name"; // Change API data: A user has a new full name
@@ -54,62 +73,65 @@ const deativateUser = (user) => {
   //   app1: null, app2: null, app3: null, app4: null, created: null, lastApproved: null, 
   //   lastUpdated: null
   // });
-  // Users.updateOne({ fullName: "Igor Pekelis", status: "active"},{ $set: { status: "inactive"} }); // Set a record inactive
 
   const keyedAPIUsers = _.keyBy(aPIUsers, 'sid'); // Key API users by SID
+  await getKeyDBUsers(); // Get DB users and key by SID
 
-  let dBUsers = await Users.find({ $or: [{ status: "active" }, { status: "noManager" }] }).toArray(); // Retrieve all active DB users
-  let keyedDBUsers = _.keyBy(dBUsers, 'sid'); // Key all active DB users by SID
-
-  // Compare API and DB users and stage all creates/updates to be performed in DB
-  aPIUsers.forEach((aPIUser) => { // User in API but not DB
-    if (!keyedDBUsers[aPIUser.sid]) { createUser(aPIUser); } // Create new user
+  // Compare API and DB users and create/update DB users as necessary
+  aPIUsers.forEach((aPIUser) => {
+    if (!keyedDBUsers[aPIUser.sid]) { // User in API but not DB - Create new user
+      createUser(aPIUser); 
+    }
     else { // User in API and DB
       if (aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) { // User has updated manager in API - Set inactive and create new user
-        deativateUser(aPIUser);
+        deactivateUser(aPIUser);
         createUser(aPIUser);
         updateManagers++; // **Testing**
       }
       if (aPIUser.fullName != keyedDBUsers[aPIUser.sid].fullName) { // User has updated full name in API - Update full name
-        updates.push({ updateOne: { filter: { sid: aPIUser.sid, status: 'active' }, update: { $set: { fullName: aPIUser.fullName, lastUpdated: iSODate } } } });
-        updateFullNames++; // **Testing**
+        updateUserFullName(aPIUser);
       }
     }
   });
-  dBUsers.forEach((dBUser) => { if (!keyedAPIUsers[dBUser.sid]) { deativateUser(dBUser); } }); // User not in API - Set inactive
+  dBUsers.forEach((dBUser) => { if (!keyedAPIUsers[dBUser.sid]) { deactivateUser(dBUser); } }); // User not in API - Set inactive
 
-  updates.length && await Users.bulkWrite(updates); // Perform all creates/updates in DB
-
+  await db.add(addStaff).execute(); // Create new users in DB
+	
   // Send reminder emails to managers
-  dBUsers = await Users.find({ $or: [{ status: "active" }, { status: "noManager" }] }).toArray(); // Retrieve all active/noManager DB users
-  keyedDBUsers = _.keyBy(dBUsers, 'sid'); // Key all active DB users by SID
-  let byManager = await Users.aggregate([
-    { $match: { $and: [{ status: "active" }, { lastApproved: null }, { managerSID: { $ne: '' } }] } },
-    { $group: { _id: "$managerSID" } }
-  ]).toArray();
+  await getKeyDBUsers(); // Get DB users and key by SID
+  const needAuth = dBUsers.filter(dBUser => dBUser.status === "active" && dBUser.lastApproved === null);
+  const byManager = _.groupBy(needAuth, 'managerSID');
   let emailCount = 0; // *Testing**
-  byManager.forEach((manager) => {
-    if (keyedDBUsers[manager._id].fullName && keyedDBUsers[manager._id].email) {
-      sendEmail(keyedDBUsers[manager._id].fullName, keyedDBUsers[manager._id].email);
+  Object.keys(byManager).forEach((sid) => {
+    if (keyedDBUsers[sid].fullName && keyedDBUsers[sid].email) {
+      sendEmail(keyedDBUsers[sid].fullName, keyedDBUsers[sid].email);
       emailCount++ // *Testing**
     }
   });
 
+  // **Testing** - Set a record to inactive
+  // await db.modify('($.status == "active") && ($.fullName == "Igor Pekelis")')
+  //   .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
+
   // **Testing**
-  const dBUsersCount = await Users.find({}).toArray();
-  const dBUsersActiveCount = await Users.find({ status: 'active' }).toArray();
+  let dBUsersCount = [];
+  await db.find().execute((doc) => { if (doc != undefined) dBUsersCount.push(doc); });
+  const dBUsersActiveCount = dBUsersCount.filter(dbUser => dbUser.status === "active");
+  const dBUsersInactiveCount = dBUsersCount.filter(dbUser => dbUser.status === "inactive");
+  const dBUsersNoManagerCount = dBUsersCount.filter(dbUser => dbUser.status === "noManager");
   console.log("Users in DB: " + dBUsersCount.length);
-  console.log("Active Users in DB: " + dBUsersActiveCount.length);
+  console.log("--Active: " + dBUsersActiveCount.length);
+  console.log("--Inactive: " + dBUsersInactiveCount.length);
+  console.log("--NoManager: " + dBUsersNoManagerCount.length);
   console.log("Create new user(s): " + newUsers);
   console.log("Deactivate user(s): " + deactivateUsers);
   console.log("Update manager(s): " + updateManagers);
   console.log("Update full name(s): " + updateFullNames);
   console.log("Reminder email(s): " + emailCount);
-  const users1 = await Users.find({ sid: aPIUsers[766].sid }).project({ _id: 0, sid: 1, fullName: 1, managerSID: 1, managerFullName: 1, status: 1 }).toArray();
-  console.log(users1);
-  const users2 = await Users.find({ sid: 'New SID' }).project({ _id: 0, sid: 1, fullName: 1, managerSID: 1, managerFullName: 1, status: 1 }).toArray();
-  console.log(users2);
+  query = `$.sid == ${JSON.stringify(aPIUsers[766].sid)}`;
+  await db.find(query).execute((doc) => { if (doc != undefined) console.log(doc); } );
+  await db.find('$.sid == "New SID"').execute((doc) => { if (doc != undefined) console.log(doc); } );
 
-  client.close(); // Close Mongo connection
+	session.close(); // Close MySQL connection
 
 })();

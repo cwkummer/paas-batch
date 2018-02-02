@@ -14,7 +14,7 @@ let template = fs.readFileSync("reminderTemplate.html").toString();
 let mailOptions = {
   from: "paas-do-not-reply@state.ca.gov",
   to: "",
-  subject: "Reminder: Complete PAAS Approvals",
+  subject: "Reminder: Complete PAAS Authorizations",
   html: template,
   attachments: [{
     filename: "odi-logo.png",
