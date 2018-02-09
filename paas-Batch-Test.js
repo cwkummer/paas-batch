@@ -26,13 +26,13 @@ const createUser = (user) => {
   newUsers++; // **Testing**
 };
 const deactivateUser = async (user) => {
-  query = `($.status == "active") && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
 	await db.modify(query)
     .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
   deactivateUsers++; // **Testing**
 };
 const updateUserFullName = async (user) => {
-  query = `($.status == "active") && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
   await db.modify(query)
     .set('$.fullName', user.fullName).set('$.lastUpdated', iSODate).execute();
   updateFullNames++; // **Testing**
@@ -40,14 +40,14 @@ const updateUserFullName = async (user) => {
 const getKeyDBUsers = async () => {
   dBUsers = [];
   await db.find("$.status IN ('active','noManager')")
-    .execute((doc) => { if (doc != undefined) dBUsers.push(doc); });
+    .execute((doc) => { if (doc) dBUsers.push(doc); });
   keyedDBUsers = _.keyBy(dBUsers, 'sid');
 }
 
 (async () => {
 
 	// Connect to MySQL
-  const session = await mySQLX.getSession({ host: 'localhost', port: 33060, dbUser: 'root', dbPassword: '5@nj0$3@', ssl: false });
+  const session = await mySQLX.getSession({ host: 'localhost', port: 33061, dbUser: 'root', dbPassword: '5@nj0$3@', ssl: false });
 	db = session.getSchema('paas').getCollection('authorizations');
 
   // Yearly reset of all users on January 31st
