@@ -3,6 +3,7 @@ const Promise = fetch.Promise = require('bluebird');
 const mySQLX = require('@mysql/xdevapi');
 const _ = require('lodash');
 const uuid = require('uuid/v4');
+const AD = require('ad');
 const sendEmail = require('./paas-SendEmail.js');
 
 let newUsers = 0, deactivateUsers = 0, updateManagers = 0, updateFullNames = 0;  // **Testing**
@@ -14,9 +15,15 @@ const authYear = (() => {
   return date.getFullYear();
 })();
 
+const ad = new AD({ // Connect to AD
+  url: "ldap://tdc.ad.teale.ca.gov", 
+  user: "chris.kummer@state.ca.gov",
+  pass: "YanksWin35"
+});
+
 const getUUID = () => ( uuid().replace(/-/g,"").toUpperCase() )
 const yearlyReset = async () => {
-  await db.modify("$.status IN ('active','noManager')")
+  await db.modify("$.status IN ('active','noManager','assignedManager')")
   .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
 }
 const createUser = (user) => {
@@ -26,20 +33,20 @@ const createUser = (user) => {
   newUsers++; // **Testing**
 };
 const deactivateUser = async (user) => {
-  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager','assignedManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
 	await db.modify(query)
     .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
   deactivateUsers++; // **Testing**
 };
 const updateUserFullName = async (user) => {
-  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager','assignedManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
   await db.modify(query)
     .set('$.fullName', user.fullName).set('$.lastUpdated', iSODate).execute();
   updateFullNames++; // **Testing**
 }
 const getKeyDBUsers = async () => {
   dBUsers = [];
-  await db.find("$.status IN ('active','noManager')")
+  await db.find("$.status IN ('active','noManager','assignedManager')")
     .execute((doc) => { if (doc) dBUsers.push(doc); });
   keyedDBUsers = _.keyBy(dBUsers, 'sid');
 }
@@ -59,7 +66,7 @@ const getKeyDBUsers = async () => {
       fullName: x.fullName, sid: x.sid, email: x.email, managerFullName: x.manager, 
       managerSID: x.managerSid, status: 'active', app1: null, app2: null, app3: null, 
       app4: null, created: null, lastApproved: null, lastUpdated: null, authYear: authYear, 
-      _id: getUUID()
+      _id: getUUID(), samAccount: x.samAccount
     })))
 
   // **Testing**
@@ -83,11 +90,15 @@ const getKeyDBUsers = async () => {
       createUser(aPIUser);
     }
     else { // User in API and DB
-      if (aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) { // User has updated manager in API - Set inactive and create new user
-        deactivateUser(aPIUser);
-        createUser(aPIUser);
-        updateManagers++; // **Testing**
-      }
+      if ((aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) // User has different manager in API
+        // Ignore if API managerSID is null and DB status is "assignedManager".
+        // These records have manually set managers and shouldn't flip back to "noManager" status.
+        && (aPIUser.managerSID != "" || keyedDBUsers[aPIUser.sid].status != "assignedManager")) {
+          // Set inactive and create new user
+          deactivateUser(aPIUser);
+          createUser(aPIUser);
+          updateManagers++; // **Testing**
+        }
       if (aPIUser.fullName != keyedDBUsers[aPIUser.sid].fullName) { // User has updated full name in API - Update full name
         updateUserFullName(aPIUser);
       }
@@ -109,6 +120,12 @@ const getKeyDBUsers = async () => {
     }
   });
 
+  // Populate "TDC\PAAS Managers - Assigned" group
+  const assignedManagers = dBUsers.filter(dBUser => dBUser.status === "assignedManager");
+  Object.keys(assignedManagers).forEach((samAccount) => {
+    ad.group("PAAS Managers - Assigned").addUser(samAccount)
+  });
+
   // **Testing** - Set a record to inactive
   // await db.modify('($.status == "active") && ($.fullName == "Igor Pekelis")')
   //   .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
@@ -119,10 +136,12 @@ const getKeyDBUsers = async () => {
   const dBUsersActiveCount = dBUsersCount.filter(dbUser => dbUser.status === "active");
   const dBUsersInactiveCount = dBUsersCount.filter(dbUser => dbUser.status === "inactive");
   const dBUsersNoManagerCount = dBUsersCount.filter(dbUser => dbUser.status === "noManager");
+  const dBUsersAssignedManagerCount = dBUsersCount.filter(dbUser => dbUser.status === "assignedManager");
   console.log("Users in DB: " + dBUsersCount.length);
   console.log("--Active: " + dBUsersActiveCount.length);
-  console.log("--Inactive: " + dBUsersInactiveCount.length);
+  console.log("--AssignedManager: " + dBUsersAssignedManagerCount.length);
   console.log("--NoManager: " + dBUsersNoManagerCount.length);
+  console.log("--Inactive: " + dBUsersInactiveCount.length);
   console.log("Create new user(s): " + newUsers);
   console.log("Deactivate user(s): " + deactivateUsers);
   console.log("Update manager(s): " + updateManagers);
