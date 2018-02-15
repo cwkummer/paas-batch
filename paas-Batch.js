@@ -3,6 +3,7 @@ const Promise = fetch.Promise = require('bluebird');
 const mySQLX = require('@mysql/xdevapi');
 const _ = require('lodash');
 const uuid = require('uuid/v4');
+const AD = require('ad');
 const sendEmail = require('./paas-SendEmail.js');
 
 let db, query, dBUsers = [], keyedDBUsers = [], addStaff = []
@@ -13,9 +14,15 @@ const authYear = (() => {
   return date.getFullYear();
 })();
 
+const ad = new AD({ // Connect to AD
+  url: "ldap://tdc.ad.teale.ca.gov",
+  user: "PAASADSvc@tdc.ad.teale.ca.gov",
+  pass: "1oH#N9@m02$z184H"
+});
+
 const getUUID = () => ( uuid().replace(/-/g,"").toUpperCase() )
 const yearlyReset = async () => {
-  await db.modify("$.status IN ('active','noManager')")
+  await db.modify("$.status IN ('active','noManager','assignedManager')")
   .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
 }
 const createUser = (user) => {
@@ -24,18 +31,18 @@ const createUser = (user) => {
 	addStaff.push(user);
 };
 const deactivateUser = async (user) => {
-  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager','assignedManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
 	await db.modify(query)
     .set('$.status', 'inactive').set('$.lastUpdated', iSODate).execute();
 };
 const updateUserFullName = async (user) => {
-  query = `($.status IN ('active','noManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
+  query = `($.status IN ('active','noManager','assignedManager')) && ($.sid == ${JSON.stringify(user.sid)})`;
   await db.modify(query)
     .set('$.fullName', user.fullName).set('$.lastUpdated', iSODate).execute();
 }
 const getKeyDBUsers = async () => {
   dBUsers = [];
-  await db.find("$.status IN ('active','noManager')")
+  await db.find("$.status IN ('active','noManager','assignedManager')")
     .execute((doc) => { if (doc) dBUsers.push(doc); });
   keyedDBUsers = _.keyBy(dBUsers, 'sid');
 }
@@ -55,7 +62,7 @@ const getKeyDBUsers = async () => {
       fullName: x.fullName, sid: x.sid, email: x.email, managerFullName: x.manager, 
       managerSID: x.managerSid, status: 'active', app1: null, app2: null, app3: null, 
       app4: null, created: null, lastApproved: null, lastUpdated: null, authYear: authYear, 
-      _id: getUUID()
+      _id: getUUID(), samAccount: x.samAccount
     })))
 
   const keyedAPIUsers = _.keyBy(aPIUsers, 'sid'); // Key API users by SID
@@ -67,10 +74,14 @@ const getKeyDBUsers = async () => {
       createUser(aPIUser);
     }
     else { // User in API and DB
-      if (aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) { // User has updated manager in API - Set inactive and create new user
-        deactivateUser(aPIUser);
-        createUser(aPIUser);
-      }
+      if ((aPIUser.managerSID != keyedDBUsers[aPIUser.sid].managerSID) // User has different manager in API
+        // Ignore if API managerSID is null and DB status is "assignedManager".
+        // These records have manually set managers and shouldn't flip back to "noManager" status.
+        && (aPIUser.managerSID != "" || keyedDBUsers[aPIUser.sid].status != "assignedManager")) {
+          // Set inactive and create new user
+          deactivateUser(aPIUser);
+          createUser(aPIUser);
+        }
       if (aPIUser.fullName != keyedDBUsers[aPIUser.sid].fullName) { // User has updated full name in API - Update full name
         updateUserFullName(aPIUser);
       }
@@ -81,7 +92,7 @@ const getKeyDBUsers = async () => {
   await db.add(addStaff).execute(); // Create new users in DB
 
   // Send reminder emails to managers
-  if(date.getDay() == 1) { // Send only on Mondays
+  if(date.getDay() == 1) { // Send emails only on Mondays
     await getKeyDBUsers(); // Get DB users and key by SID
     const needAuth = dBUsers.filter(dBUser => dBUser.status === "active" && dBUser.lastApproved === null);
     const byManager = _.groupBy(needAuth, 'managerSID');
@@ -91,6 +102,14 @@ const getKeyDBUsers = async () => {
       }
     });
   };
+
+  // Populate "TDC\PAAS Managers - Assigned" group
+  await ad.group('PAAS Managers - Assigned').remove();
+  await ad.group().add({ name: 'PAAS Managers - Assigned', location: 'TDC/SharePoint' });
+  const assignedManagers = dBUsers.filter(dBUser => dBUser.status === "assignedManager");
+  assignedManagers.forEach((assignedManager) => {
+    ad.group("PAAS Managers - Assigned").addUser(assignedManager.samAccount);
+  });
 
 	session.close(); // Close MySQL connection
 

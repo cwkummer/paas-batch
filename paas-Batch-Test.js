@@ -6,7 +6,7 @@ const uuid = require('uuid/v4');
 const AD = require('ad');
 const sendEmail = require('./paas-SendEmail.js');
 
-let newUsers = 0, deactivateUsers = 0, updateManagers = 0, updateFullNames = 0;  // **Testing**
+let newUsers = 0, deactivateUsers = 0, updateManagers = 0, updateFullNames = 0, emailCount = 0;  // **Testing**
 let db, query, dBUsers = [], keyedDBUsers = [], addStaff = []
 const date = new Date();
 const iSODate = date.toISOString();
@@ -16,9 +16,9 @@ const authYear = (() => {
 })();
 
 const ad = new AD({ // Connect to AD
-  url: "ldap://tdc.ad.teale.ca.gov", 
-  user: "chris.kummer@state.ca.gov",
-  pass: "YanksWin35"
+  url: "ldap://tdc.ad.teale.ca.gov",
+  user: "PAASADSvc@tdc.ad.teale.ca.gov",
+  pass: "1oH#N9@m02$z184H"
 });
 
 const getUUID = () => ( uuid().replace(/-/g,"").toUpperCase() )
@@ -109,21 +109,24 @@ const getKeyDBUsers = async () => {
   await db.add(addStaff).execute(); // Create new users in DB
 
   // Send reminder emails to managers
-  await getKeyDBUsers(); // Get DB users and key by SID
-  const needAuth = dBUsers.filter(dBUser => dBUser.status === "active" && dBUser.lastApproved === null);
-  const byManager = _.groupBy(needAuth, 'managerSID');
-  let emailCount = 0; // *Testing**
-  Object.keys(byManager).forEach((sid) => {
-    if (keyedDBUsers[sid].fullName && keyedDBUsers[sid].email) {
-      sendEmail(keyedDBUsers[sid].fullName, keyedDBUsers[sid].email);
-      emailCount++ // *Testing**
-    }
-  });
+  if (true) { // ** Testing - always sends emails **
+    await getKeyDBUsers(); // Get DB users and key by SID
+    const needAuth = dBUsers.filter(dBUser => dBUser.status === "active" && dBUser.lastApproved === null);
+    const byManager = _.groupBy(needAuth, 'managerSID');
+    Object.keys(byManager).forEach((sid) => {
+      if (keyedDBUsers[sid].fullName && keyedDBUsers[sid].email) {
+        sendEmail(keyedDBUsers[sid].fullName, keyedDBUsers[sid].email);
+        emailCount++ // *Testing**
+      }
+    });
+  };
 
   // Populate "TDC\PAAS Managers - Assigned" group
+  await ad.group('PAAS Managers - Assigned').remove();
+  await ad.group().add({ name: 'PAAS Managers - Assigned', location: 'TDC/SharePoint' });
   const assignedManagers = dBUsers.filter(dBUser => dBUser.status === "assignedManager");
-  Object.keys(assignedManagers).forEach((samAccount) => {
-    ad.group("PAAS Managers - Assigned").addUser(samAccount)
+  assignedManagers.forEach((assignedManager) => {
+    ad.group("PAAS Managers - Assigned").addUser(assignedManager.samAccount);
   });
 
   // **Testing** - Set a record to inactive
@@ -132,7 +135,7 @@ const getKeyDBUsers = async () => {
 
   // **Testing**
   let dBUsersCount = [];
-  await db.find().execute((doc) => { if (doc != undefined) dBUsersCount.push(doc); });
+  await db.find().execute((doc) => { if (doc) dBUsersCount.push(doc); });
   const dBUsersActiveCount = dBUsersCount.filter(dbUser => dbUser.status === "active");
   const dBUsersInactiveCount = dBUsersCount.filter(dbUser => dbUser.status === "inactive");
   const dBUsersNoManagerCount = dBUsersCount.filter(dbUser => dbUser.status === "noManager");
