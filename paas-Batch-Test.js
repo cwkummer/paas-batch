@@ -108,9 +108,18 @@ const getKeyDBUsers = async () => {
 
   await db.add(addStaff).execute(); // Create new users in DB
 
+  // Populate "TDC\PAAS Managers - Assigned" group
+  await getKeyDBUsers(); // Get DB users and key by SID
+  await ad.group('PAAS Managers - Assigned').remove();
+  await ad.group().add({ name: 'PAAS Managers - Assigned', location: 'TDC/SharePoint' });
+  const assignedManagers = dBUsers.filter(dBUser => dBUser.status === "assignedManager");
+  const uniqueAssignedManagers = _.uniqBy(assignedManagers, 'managerSID');
+  uniqueAssignedManagers.forEach((assignedManager) => {
+    ad.group("PAAS Managers - Assigned").addUser(keyedDBUsers[assignedManager.managerSID].samAccount);
+  });
+
   // Send reminder emails to managers
   if (true) { // ** Testing - always sends emails **
-    await getKeyDBUsers(); // Get DB users and key by SID
     const needAuth = dBUsers.filter(dBUser => dBUser.status === "active" && dBUser.lastApproved === null);
     const byManager = _.groupBy(needAuth, 'managerSID');
     Object.keys(byManager).forEach((sid) => {
@@ -120,14 +129,6 @@ const getKeyDBUsers = async () => {
       }
     });
   };
-
-  // Populate "TDC\PAAS Managers - Assigned" group
-  await ad.group('PAAS Managers - Assigned').remove();
-  await ad.group().add({ name: 'PAAS Managers - Assigned', location: 'TDC/SharePoint' });
-  const assignedManagers = dBUsers.filter(dBUser => dBUser.status === "assignedManager");
-  assignedManagers.forEach((assignedManager) => {
-    ad.group("PAAS Managers - Assigned").addUser(assignedManager.samAccount);
-  });
 
   // **Testing** - Set a record to inactive
   // await db.modify('($.status == "active") && ($.fullName == "Igor Pekelis")')
